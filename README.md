@@ -1,5 +1,3 @@
-Claro! Aqui está o texto completo em formato simples:
-
 ---
 
 # Módulo de Pagamento OpenPix para WHMCS
