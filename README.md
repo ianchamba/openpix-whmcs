@@ -27,7 +27,6 @@ Certifique-se de ter sua chave de API da OpenPix. Você pode obtê-la no painel 
 - **Endpoint para criar cobranças**: `https://api.openpix.com.br/api/v1/charge`
 - **Token de autorização**: Insira seu token na configuração do módulo.
 - **Authorization**: Insira um cabeçalho no seu Webhook com o nome de Authorization, o valor é seu AppID.
-- 
 
 ## Estrutura do Repositório
 
