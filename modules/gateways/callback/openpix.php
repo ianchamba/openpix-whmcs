@@ -7,9 +7,24 @@ require_once '../../../includes/invoicefunctions.php';
 $gatewayModuleName = 'openpix';
 $gatewayParams = getGatewayVariables($gatewayModuleName);
 
+// Verifica se o m贸dulo de gateway est谩 ativo
 if (!$gatewayParams['type']) {
-    error_log("Erro: Módulo de gateway inativo.");
-    die("Módulo de gateway inativo");
+    error_log("Erro: M贸dulo de gateway inativo.");
+    die("M贸dulo de gateway inativo");
+}
+
+// Recupera o valor da apiKey configurada no openpix_config
+$expectedApiKey = $gatewayParams['apiKey'];
+
+// Verifica a presen莽a do header Authorization no webhook
+$headers = getallheaders(); // Obt茅m todos os cabe莽alhos enviados no webhook
+
+// Recupera a API Key do cabe莽alho
+$receivedApiKey = $headers['X-Openpix-Authorization'] ?? '';
+
+if ($receivedApiKey !== $expectedApiKey) {
+    error_log("Erro: Webhook recebido com chave API inv谩lida. Chave esperada: {$expectedApiKey}, chave recebida: {$receivedApiKey}");
+    die("Unauthorized");
 }
 
 // Recebe o JSON de entrada e decodifica
@@ -21,7 +36,7 @@ if (json_last_error() !== JSON_ERROR_NONE) {
 
 error_log("Dados recebidos no webhook: " . print_r($input, true));
 
-// Verifica se todos os campos necessários estão presentes
+// Verifica se todos os campos necess谩rios est茫o presentes
 if (!isset($input['charge']['correlationID'], $input['charge']['transactionID'], $input['charge']['value'], $input['charge']['status'])) {
     error_log("Erro: Dados incompletos no webhook - Dados recebidos: " . print_r($input, true));
     die("Dados incompletos recebidos.");
