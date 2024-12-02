@@ -10,6 +10,7 @@ Este é um módulo gratuito para integrar o método de pagamento OpenPix ao WHMC
 - Geração de cobranças Pix diretamente no WHMCS
 - Webhook para confirmação automática de pagamentos
 - Simplicidade e facilidade na configuração
+- Novidade: Agora quando uma cobrança é expirada dentro da OpenPix, a fatura cancela automaticamente no WHMCS.
 
 ## Instalação
 
