@@ -36,10 +36,29 @@ if (json_last_error() !== JSON_ERROR_NONE) {
 
 error_log("Dados recebidos no webhook: " . print_r($input, true));
 
-// Verifica se todos os campos necessários estão presentes
-if (!isset($input['charge']['correlationID'], $input['charge']['transactionID'], $input['charge']['value'], $input['charge']['status'])) {
-    error_log("Erro: Dados incompletos no webhook - Dados recebidos: " . print_r($input, true));
-    die("Dados incompletos recebidos.");
+if ($input['event'] === 'OPENPIX:CHARGE_EXPIRED') {
+    $invoiceId = $input['charge']['correlationID']; // ID da fatura
+
+    // Verifica o status da fatura diretamente no banco de dados
+    $result = select_query('tblinvoices', 'status', ['id' => $invoiceId]);
+    $data = mysql_fetch_assoc($result);
+
+    if ($data && strtolower($data['status']) === 'paid') {
+        error_log("A fatura ID {$invoiceId} já está paga. Nenhuma ação será realizada.");
+        die("Fatura já paga.");
+    }
+
+    // Atualiza o status da fatura para "Cancelled" no banco de dados
+    update_query('tblinvoices', ['status' => 'Cancelled'], ['id' => $invoiceId]);
+    
+    // Dispara o hook InvoiceCancelled
+    run_hook('InvoiceCancelled', [
+        'invoiceid' => $invoiceId
+    ]);
+
+    logTransaction($gatewayModuleName, $input, 'Fatura cancelada por expiração do pagamento.');
+    error_log("Fatura ID {$invoiceId} cancelada devido ao evento OPENPIX:CHARGE_EXPIRED.");
+    die("Fatura cancelada com sucesso.");
 }
 
 $invoiceId = $input['charge']['correlationID'];
@@ -50,7 +69,7 @@ $paymentStatus = $input['charge']['status'];
 error_log("Processando webhook - Invoice ID: $invoiceId, Transaction ID: $transactionId, Amount Paid: $amountPaid, Status: $paymentStatus");
 
 // Processa o pagamento com base no status
-if ($paymentStatus === 'COMPLETED') {
+if ($input['event'] === 'OPENPIX:CHARGE_COMPLETED') {
     addInvoicePayment($invoiceId, $transactionId, $amountPaid, 0, $gatewayModuleName);
     logTransaction($gatewayModuleName, $input, 'Pagamento confirmado');
     error_log("Pagamento confirmado para fatura ID: {$invoiceId}.");
