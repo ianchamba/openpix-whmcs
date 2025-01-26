@@ -34,6 +34,14 @@ function openpix_config() {
             "Type" => "System",
             "Value" => "openpix",
         ],
+        "_link" => function($params) {
+            if (!defined('WHMCS')) {
+                return []; // Impede acesso externo
+            }
+            return [
+                "apiKey" => $params['apiKey'] ?? null,
+            ];
+        }
     ];
 }
 
