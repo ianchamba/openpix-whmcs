@@ -75,6 +75,9 @@ function openpix_link($params) {
         $qrCodeUrl = "https://api.openpix.com.br/openpix/charge/brcode/image/{$existingPaymentLinkID}.png?size=1024";
         $brCode = $existingBrCode;
     } else {
+        
+        $correlationID = $invoiceId . time();
+        
         error_log("Gerando novo QR Code para a fatura #{$invoiceId}. Monto (centavos): {$amount}");
 
         $taxId = '';
@@ -84,9 +87,13 @@ function openpix_link($params) {
                 break;
             }
         }
+        
+        if (strlen($comment) > 135) {
+            $comment = substr($comment, 0, 135);
+        }
 
         $data = [
-            'correlationID' => $invoiceId,
+            'correlationID' => $correlationID,
             'value' => $amount,
             'comment' => $comment,
             'customer' => [
@@ -131,15 +138,17 @@ function openpix_link($params) {
             Capsule::table('tblinvoices')->where('id', $invoiceId)->update([
                 'paymentLinkID' => $paymentLinkID,
                 'brCode' => $brCode,
+                'invoicenum' => $correlationID,
             ]);
+            
+            // Somente executa o hook quando a resposta da API contém um brCode válido
+            run_hook('OpenpixInvoiceGenerated', ['invoiceId' => $invoiceId]);
+            error_log("Hook 'OpenpixInvoiceGenerated' executado para a fatura #{$invoiceId}");
         } else {
             error_log("Erro ao gerar QR Code. Resposta da API: " . json_encode($responseArray));
             $qrCodeUrl = '#';
         }
     }
-
-    run_hook('OpenpixInvoiceGenerated', ['invoiceId' => $invoiceId]);
-    error_log("Hook 'OpenpixInvoiceGenerated' executado para a fatura #{$invoiceId}");
 
     // Construção do HTML com QR Code e estilo ajustado
     $htmlOutput = '<div style="text-align: center; max-width: 300px; margin: auto;">';
