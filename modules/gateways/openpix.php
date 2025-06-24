@@ -66,6 +66,11 @@ function openpix_link($params) {
 
     // Formata o comentário com o nome dos produtos
     $comment = implode(', ', $products);
+    
+    $comment = preg_replace('/\x{1F1E7}\x{1F1F7}/u', '', $comment);
+    $comment = preg_replace('/\x{1F1FA}\x{1F1F8}/u', '', $comment);
+    $comment = preg_replace('/\s+/', ' ', $comment);
+    $comment = trim($comment);
 
     // Verificar se já existe um paymentLinkID e código Pix salvos nos novos campos
     if (!empty($invoiceData->paymentLinkID) && !empty($invoiceData->brCode)) {
@@ -75,10 +80,6 @@ function openpix_link($params) {
         $qrCodeUrl = "https://api.openpix.com.br/openpix/charge/brcode/image/{$existingPaymentLinkID}.png?size=1024";
         $brCode = $existingBrCode;
     } else {
-        
-        $correlationID = $invoiceId . time();
-        
-        error_log("Gerando novo QR Code para a fatura #{$invoiceId}. Monto (centavos): {$amount}");
 
         $taxId = '';
         foreach ($params['clientdetails']['customfields'] as $customfield) {
@@ -93,7 +94,7 @@ function openpix_link($params) {
         }
 
         $data = [
-            'correlationID' => $correlationID,
+            'correlationID' => $invoiceId,
             'value' => $amount,
             'comment' => $comment,
             'customer' => [
@@ -138,7 +139,6 @@ function openpix_link($params) {
             Capsule::table('tblinvoices')->where('id', $invoiceId)->update([
                 'paymentLinkID' => $paymentLinkID,
                 'brCode' => $brCode,
-                'invoicenum' => $correlationID,
             ]);
             
             // Somente executa o hook quando a resposta da API contém um brCode válido
@@ -150,15 +150,272 @@ function openpix_link($params) {
         }
     }
 
-    // Construção do HTML com QR Code e estilo ajustado
-    $htmlOutput = '<div style="text-align: center; max-width: 300px; margin: auto;">';
-    $htmlOutput .= '<p>Escaneie o QR Code abaixo para efetuar o pagamento:</p>';
-    $htmlOutput .= '<img src="' . htmlspecialchars($qrCodeUrl) . '" alt="QR Code de pagamento" style="max-width: 100%; width: 200px; height: auto;">';
-    $htmlOutput .= '<p>Ou copie o código:</p>';
-    $htmlOutput .= '<div style="overflow-wrap: break-word; word-wrap: break-word; white-space: normal; background-color: #f9f9f9; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">';
-    $htmlOutput .= '<code>' . htmlspecialchars($brCode ?? 'Erro ao obter código') . '</code>';
-    $htmlOutput .= '</div>';
-    $htmlOutput .= '</div>';
+    // Construção do HTML com QR Code, verificação automática de pagamento e estilo ajustado
+$htmlOutput = '
+<style>
+.openpix-container {
+    width: 100% !important;
+    max-width: 350px !important;
+    margin: 0 auto !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif !important;
+    background-color: #ffffff !important;
+    border-radius: 12px !important;
+    padding: 20px !important;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.08) !important;
+}
 
-    return $htmlOutput;
+.qrcode-wrapper {
+    text-align: center !important;
+    background-color: #ffffff !important;
+    border-radius: 8px !important;
+    padding: 5px !important;
+    margin-bottom: 20px !important;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05) !important;
+}
+
+.qrcode-wrapper img {
+    display: block !important;
+    max-width: 100% !important;
+    width: auto !important;
+    height: auto !important;
+    margin: 0 auto !important;
+}
+
+.pix-instructions {
+    font-size: 14px !important;
+    color: #424242 !important;
+    text-align: center !important;
+    margin-bottom: 15px !important;
+    line-height: 1.4 !important;
+}
+
+.pix-code {
+    margin-bottom: 15px !important;
+}
+
+.pix-code textarea {
+    width: 100% !important;
+    padding: 14px !important;
+    border: 1px solid #e0e0e0 !important;
+    border-radius: 8px !important;
+    background-color: #f9f9f9 !important;
+    font-family: monospace !important;
+    font-size: 13px !important;
+    min-height: 65px !important;
+    resize: none !important;
+    overflow: auto !important;
+    box-sizing: border-box !important;
+    margin-bottom: 10px !important;
+}
+
+.copy-button {
+    width: 100% !important;
+    background-color: #0066FF !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 10px 12px !important;
+    cursor: pointer !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    transition: background-color 0.2s ease !important;
+    text-align: center !important;
+}
+
+.copy-button:hover {
+    background-color: #0052cc !important;
+}
+
+.copy-message {
+    display: none !important;
+    text-align: center !important;
+    color: #00a152 !important;
+    font-size: 14px !important;
+    margin-top: 8px !important;
+    font-weight: 500 !important;
+}
+
+.payment-info {
+    background-color: #f5f9ff !important;
+    padding: 12px !important;
+    border-radius: 8px !important;
+    font-size: 13px !important;
+    color: #2c5282 !important;
+    border-left: 4px solid #4299e1 !important;
+    margin-top: 15px !important;
+}
+
+.payment-info p {
+    margin: 0 !important;
+    line-height: 1.4 !important;
+    color: #2c5282 !important;
+}
+
+.payment-status {
+    margin-top: 15px !important;
+    padding: 12px !important;
+    border-radius: 8px !important;
+    font-size: 14px !important;
+    text-align: center !important;
+    font-weight: 500 !important;
+}
+
+.status-waiting {
+    background-color: #FFF8E1 !important;
+    color: #F57F17 !important;
+    border-left: 4px solid #FFB300 !important;
+}
+
+.status-completed {
+    background-color: #E8F5E9 !important;
+    color: #2E7D32 !important;
+    border-left: 4px solid #4CAF50 !important;
+}
+
+.status-expired {
+    background-color: #FFEBEE !important;
+    color: #C62828 !important;
+    border-left: 4px solid #EF5350 !important;
+}
+
+.status-spinner {
+    display: inline-block !important;
+    width: 12px !important;
+    height: 12px !important;
+    border: 2px solid currentColor !important;
+    border-right-color: transparent !important;
+    border-radius: 50% !important;
+    animation: spin 0.75s linear infinite !important;
+    margin-right: 8px !important;
+    vertical-align: middle !important;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+</style>
+
+<div class="openpix-container">
+    <div class="qrcode-wrapper">
+        <img src="' . htmlspecialchars($qrCodeUrl) . '" alt="QR Code de pagamento">
+    </div>
+    
+    <p class="pix-instructions">Escaneie o QR Code ou copie o código abaixo:</p>
+    
+    <div class="pix-code">
+        <textarea id="pixCode" readonly>' . htmlspecialchars($brCode ?? 'Erro ao obter código') . '</textarea>
+        <button onclick="copyPixCode()" id="copyBtn" class="copy-button">Copiar Código PIX</button>
+    </div>
+    
+    <div id="copyMessage" class="copy-message">
+        Código copiado com sucesso!
+    </div>
+    
+    <div id="paymentStatus" class="payment-status status-waiting">
+        <span class="status-spinner"></span> Aguardando pagamento...
+    </div>
+    
+    <div class="payment-info">
+        <p><strong>Importante:</strong> O pagamento será confirmado automaticamente após ser processado.</p>
+    </div>
+</div>
+
+<script>
+function copyPixCode() {
+    const pixCodeElement = document.getElementById("pixCode");
+    pixCodeElement.select();
+    document.execCommand("copy");
+    
+    const copyBtn = document.getElementById("copyBtn");
+    const copyMessage = document.getElementById("copyMessage");
+    
+    copyBtn.innerHTML = "Copiado!";
+    copyBtn.style.backgroundColor = "#00a152";
+    copyMessage.style.display = "block";
+    
+    setTimeout(function() {
+        copyBtn.innerHTML = "Copiar Código PIX";
+        copyBtn.style.backgroundColor = "#0066FF";
+        copyMessage.style.display = "none";
+    }, 2000);
+    
+    // Para compatibilidade com navegadores modernos
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(pixCodeElement.value)
+            .catch(err => console.error("Erro ao copiar: ", err));
+    }
+}
+
+// Função para verificar o status do pagamento usando AJAX para o servidor
+let checkCount = 0;
+const maxChecks = 720; // 1 hora (720 checks de 5 segundos)
+let paymentCompleted = false;
+
+function checkPaymentStatus() {
+    if (paymentCompleted || checkCount >= maxChecks) {
+        return;
+    }
+    
+    checkCount++;
+    
+    const statusElement = document.getElementById("paymentStatus");
+    const correlationID = "' . $invoiceId . '";
+    
+    // Cria um timestamp para evitar cache
+    const timestamp = new Date().getTime();
+    
+    // Usando AJAX para fazer a requisição para um endpoint no servidor
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "modules/gateways/openpix/verify.php", true);
+    xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    
+                    if (response.status === "COMPLETED") {
+                        paymentCompleted = true;
+                        statusElement.className = "payment-status status-completed";
+                        statusElement.innerHTML = "✅ Pagamento confirmado! Atualizando...";
+                        
+                        // Recarrega a página após 3 segundos quando o pagamento for confirmado
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 3000);
+                    } 
+                    else if (response.status === "ACTIVE") {
+                        statusElement.className = "payment-status status-waiting";
+                        statusElement.innerHTML = "<span class=\"status-spinner\"></span> Aguardando pagamento...";
+                    } 
+                    else {
+                        statusElement.className = "payment-status status-expired";
+                        statusElement.innerHTML = "⚠️ Pagamento expirado ou cancelado";
+                        paymentCompleted = true; // Para parar as verificações
+                    }
+                } catch (error) {
+                    console.error("Erro ao processar resposta:", error);
+                }
+            } else {
+                console.error("Erro na requisição:", xhr.status);
+            }
+            
+            // Continua verificando mesmo em caso de erro
+            if (!paymentCompleted) {
+                setTimeout(checkPaymentStatus, 5000); // Verificar novamente em 5 segundos
+            }
+        }
+    };
+    
+    xhr.send("correlationID=" + encodeURIComponent(correlationID));
+}
+
+// Inicia a verificação assim que a página carregar
+document.addEventListener("DOMContentLoaded", function() {
+    // Aguardar 2 segundos antes da primeira verificação
+    setTimeout(checkPaymentStatus, 2000);
+});
+</script>';
+
+return $htmlOutput;
 }
