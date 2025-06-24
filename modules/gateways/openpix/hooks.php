@@ -36,7 +36,6 @@ add_hook('InvoiceCancelled', 1, function ($vars) {
     $apiKey = $gatewayParams['apiKey'];
     error_log("[OpenPix] Chave API obtida via getGatewayVariables (parcial): " . substr($apiKey, 0, 6) . "********");
 
-    // ID da cobrança na OpenPix será o próprio invoiceId
     $apiUrl = "https://api.openpix.com.br/api/v1/charge/{$invoiceId}";
     error_log("[OpenPix] URL de cancelamento da OpenPix: {$apiUrl}");
 
