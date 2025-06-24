@@ -4,7 +4,7 @@ require_once '../../../init.php';
 require_once '../../../includes/gatewayfunctions.php';
 require_once '../../../includes/invoicefunctions.php';
 
-// Fun�0�4�0�0o para retornar resposta em JSON com c��digo HTTP adequado
+// Função para retornar resposta em JSON com código HTTP adequado
 function returnJsonResponse($message, $success = true, $httpCode = 200) {
     http_response_code($httpCode);
     header('Content-Type: application/json');
@@ -26,19 +26,19 @@ function returnJsonResponse($message, $success = true, $httpCode = 200) {
 $gatewayModuleName = 'openpix';
 $gatewayParams = getGatewayVariables($gatewayModuleName);
 
-// Verifica se o m��dulo de gateway est�� ativo
+// Verifica se o módulo de gateway está ativo
 if (!$gatewayParams['type']) {
-    error_log("Erro: M��dulo de gateway inativo.");
-    returnJsonResponse("M��dulo de gateway inativo", false, 400);
+    error_log("Erro: Módulo de gateway inativo.");
+    returnJsonResponse("Módulo de gateway inativo", false, 400);
 }
 
 // Recupera o valor da apiKey configurada no openpix_config
 $expectedApiKey = trim($gatewayParams['apiKey']);
 
-// Obt��m todos os cabe�0�4alhos enviados no webhook
+// Obtém todos os cabeçalhos enviados no webhook
 $headers = getallheaders();
 
-// Recupera a API Key do header ou do par�0�9metro ?authorization=
+// Recupera a API Key do header ou do parâmetro ?authorization=
 $receivedApiKey = '';
 if (!empty($headers['X-Openpix-Authorization'])) {
     $receivedApiKey = trim($headers['X-Openpix-Authorization']);
@@ -47,11 +47,11 @@ if (!empty($headers['X-Openpix-Authorization'])) {
 }
 
 if (empty($receivedApiKey) || $receivedApiKey !== $expectedApiKey) {
-    error_log("Erro: Webhook recebido com chave API inv��lida. Esperado: {$expectedApiKey}, recebido: {$receivedApiKey}");
+    error_log("Erro: Webhook recebido com chave API inválida. Esperado: {$expectedApiKey}, recebido: {$receivedApiKey}");
     returnJsonResponse("Unauthorized", false, 401);
 }
 
-// L�� e decodifica o JSON de entrada
+// Lê e decodifica o JSON de entrada
 $rawInput = file_get_contents('php://input');
 $input = json_decode($rawInput, true);
 if (json_last_error() !== JSON_ERROR_NONE) {
@@ -61,7 +61,7 @@ if (json_last_error() !== JSON_ERROR_NONE) {
 
 error_log("Dados recebidos no webhook: " . print_r($input, true));
 
-// Fun�0�4�0�0o para extrair o Invoice ID do array additionalInfo
+// Função para extrair o Invoice ID do array additionalInfo
 function getInvoiceIdFromCharge(array $charge): ?string {
     if (isset($charge['additionalInfo']) && is_array($charge['additionalInfo'])) {
         foreach ($charge['additionalInfo'] as $info) {
@@ -73,7 +73,7 @@ function getInvoiceIdFromCharge(array $charge): ?string {
     return null;
 }
 
-// Fun�0�4�0�0o para verificar se a fatura existe
+// Função para verificar se a fatura existe
 function invoiceExists($invoiceId) {
     $result = select_query('tblinvoices', 'id', ['id' => $invoiceId]);
     return mysql_num_rows($result) > 0;
@@ -85,14 +85,14 @@ $charge = $input['charge'] ?? [];
 // Extrai o invoiceId
 $invoiceId = getInvoiceIdFromCharge($charge);
 if (!$invoiceId) {
-    error_log("Erro: Invoice ID n�0�0o encontrado no evento {$event}.");
-    returnJsonResponse("Invoice ID n�0�0o encontrado", false, 400);
+    error_log("Erro: Invoice ID não encontrado no evento {$event}.");
+    returnJsonResponse("Invoice ID não encontrado", false, 400);
 }
 
 // Verifica se a fatura existe
 if (!invoiceExists($invoiceId)) {
-    error_log("Erro: Fatura ID {$invoiceId} n�0�0o existe no sistema.");
-    returnJsonResponse("Fatura n�0�0o encontrada no sistema", false, 404);
+    error_log("Erro: Fatura ID {$invoiceId} não existe no sistema.");
+    returnJsonResponse("Fatura não encontrada no sistema", false, 404);
 }
 
 if ($event === 'OPENPIX:CHARGE_EXPIRED') {
@@ -100,19 +100,19 @@ if ($event === 'OPENPIX:CHARGE_EXPIRED') {
     $result = select_query('tblinvoices', 'status', ['id' => $invoiceId]);
     $data = mysql_fetch_assoc($result);
     if ($data && strtolower($data['status']) === 'paid') {
-        error_log("Fatura ID {$invoiceId} j�� est�� paga. Nenhuma a�0�4�0�0o necess��ria.");
-        returnJsonResponse("Fatura j�� paga", true, 200);
+        error_log("Fatura ID {$invoiceId} já está paga. Nenhuma ação necessária.");
+        returnJsonResponse("Fatura já paga", true, 200);
     }
 
     // Cancela a fatura
     update_query('tblinvoices', ['status' => 'Cancelled'], ['id' => $invoiceId]);
     run_hook('InvoiceCancelled', ['invoiceid' => $invoiceId]);
-    logTransaction($gatewayModuleName, $input, 'Fatura cancelada por expira�0�4�0�0o do pagamento.');
-    error_log("Fatura ID {$invoiceId} cancelada por expira�0�4�0�0o.");
+    logTransaction($gatewayModuleName, $input, 'Fatura cancelada por expiração do pagamento.');
+    error_log("Fatura ID {$invoiceId} cancelada por expiração.");
     returnJsonResponse("Fatura cancelada com sucesso", true, 200);
 }
 
-// Para eventos diferentes de expira�0�4�0�0o, tratamos pagamento
+// Para eventos diferentes de expiração, tratamos pagamento
 $transactionId = $charge['transactionID'] ?? '';
 $amountPaid    = isset($charge['value']) ? $charge['value'] / 100 : 0;
 $paymentStatus = $charge['status'] ?? '';
@@ -120,14 +120,14 @@ $paymentStatus = $charge['status'] ?? '';
 error_log("Processando webhook - Evento: {$event}, Invoice ID: {$invoiceId}, Transaction ID: {$transactionId}, Valor: {$amountPaid}, Status: {$paymentStatus}");
 
 if ($event === 'OPENPIX:CHARGE_COMPLETED') {
-    // Verifica se a fatura j�� est�� paga antes de processar
+    // Verifica se a fatura já está paga antes de processar
     $result = select_query('tblinvoices', 'status', ['id' => $invoiceId]);
     $data = mysql_fetch_assoc($result);
     
     if ($data && strtolower($data['status']) === 'paid') {
-        error_log("Fatura ID {$invoiceId} j�� est�� paga. Nenhuma a�0�4�0�0o necess��ria.");
-        logTransaction($gatewayModuleName, $input, 'Fatura j�� paga. Ignorando pagamento duplicado.');
-        returnJsonResponse("Fatura j�� paga", false, 409); // Use 409 Conflict para indicar que j�� foi processada
+        error_log("Fatura ID {$invoiceId} já está paga. Nenhuma ação necessária.");
+        logTransaction($gatewayModuleName, $input, 'Fatura já paga. Ignorando pagamento duplicado.');
+        returnJsonResponse("Fatura já paga", false, 409); // Use 409 Conflict para indicar que já foi processada
     } else {
         addInvoicePayment($invoiceId, $transactionId, $amountPaid, 0, $gatewayModuleName);
         logTransaction($gatewayModuleName, $input, 'Pagamento confirmado');
