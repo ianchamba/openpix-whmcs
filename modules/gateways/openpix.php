@@ -870,4 +870,222 @@ function openpix_link($params) {
 
     return OpenPixGenerateHTML($paymentLinkID, $brCode, $invoiceId, $pollingInterval, $maxPollingAttempts);
 }
+
+function OpenPixRefundError($message, $extra = []) {
+    localAPI('LogActivity', ['description' => "PIX Reembolso: {$message}"]);
+
+    return [
+        'status' => 'error',
+        'rawdata' => array_merge(['motivo' => $message], $extra),
+    ];
+}
+
+function OpenPixRefundAmountToCents($amount) {
+    if (!is_numeric($amount)) {
+        return null;
+    }
+
+    $cents = (int) round(((float) $amount) * 100);
+
+    return $cents > 0 ? $cents : null;
+}
+
+function OpenPixRefundGetContext($invoiceId, $transid) {
+    $payment = Capsule::table('tblaccounts')
+        ->where('gateway', 'openpix')
+        ->where('transid', $transid)
+        ->where('amountin', '>', 0)
+        ->orderBy('id', 'asc')
+        ->first();
+
+    if (!$payment) {
+        return null;
+    }
+
+    if ($invoiceId > 0 && (int) $payment->invoiceid !== $invoiceId) {
+        return ['mismatch' => true];
+    }
+
+    $refunds = Capsule::table('tblaccounts')
+        ->where('gateway', 'openpix')
+        ->where('invoiceid', (int) $payment->invoiceid)
+        ->where('amountout', '>', 0);
+
+    return [
+        'paid_cents' => (int) round(((float) $payment->amountin) * 100),
+        'refunded_cents' => (int) round(((float) (clone $refunds)->sum('amountout')) * 100),
+        'refund_count' => (int) $refunds->count(),
+    ];
+}
+
+function OpenPixRefundResolveCorrelationID($client, $invoiceId, $transid, $cents, $sequence) {
+    $base = 'whmcs-rf-' . $invoiceId . '-' . $sequence . '-'
+        . substr(hash('sha256', "openpix-whmcs-refund|{$invoiceId}|{$transid}|{$cents}|{$sequence}"), 0, 12);
+
+    for ($attempt = 0; $attempt < 3; $attempt++) {
+        $candidate = $attempt === 0 ? $base : "{$base}-r{$attempt}";
+
+        try {
+            $existing = $client->refunds()->getOne($candidate);
+        } catch (\Throwable $e) {
+            return ['correlationID' => $candidate];
+        }
+
+        $existingStatus = strtoupper((string) ($existing['refund']['status'] ?? 'DESCONHECIDO'));
+
+        if ($existingStatus !== 'NOT_ACCOMPLISHED') {
+            return ['duplicate_status' => $existingStatus, 'correlationID' => $candidate];
+        }
+    }
+
+    return ['exhausted' => true];
+}
+
+function openpix_refund($params) {
+    $apiKey = trim((string) ($params['apiKey'] ?? ''));
+    $transid = trim((string) ($params['transid'] ?? ''));
+    $invoiceId = (int) ($params['invoiceid'] ?? 0);
+    $currency = strtoupper(trim((string) ($params['currency'] ?? '')));
+
+    if ($apiKey === '') {
+        return OpenPixRefundError('Chave API não configurada no gateway.');
+    }
+
+    if ($transid === '') {
+        return OpenPixRefundError('Transação original sem ID registrado. Não é possível reembolsar automaticamente.');
+    }
+
+    if ($invoiceId <= 0) {
+        return OpenPixRefundError('Fatura inválida para reembolso.');
+    }
+
+    if ($currency !== '' && $currency !== 'BRL') {
+        return OpenPixRefundError("Reembolso PIX suporta apenas BRL. Moeda recebida: {$currency}.");
+    }
+
+    $cents = OpenPixRefundAmountToCents($params['amount'] ?? null);
+    if ($cents === null) {
+        return OpenPixRefundError('Valor de reembolso inválido.');
+    }
+
+    try {
+        $context = OpenPixRefundGetContext($invoiceId, $transid);
+    } catch (\Throwable $e) {
+        return OpenPixRefundError('Falha ao consultar o histórico de transações no WHMCS: ' . $e->getMessage());
+    }
+
+    if ($context === null) {
+        return OpenPixRefundError("Pagamento original não encontrado no WHMCS para a transação {$transid}.");
+    }
+
+    if (!empty($context['mismatch'])) {
+        return OpenPixRefundError("A transação {$transid} não pertence à fatura #{$invoiceId}.");
+    }
+
+    $remainingCents = $context['paid_cents'] - $context['refunded_cents'];
+    if ($cents > $remainingCents) {
+        return OpenPixRefundError(sprintf(
+            'Valor solicitado (R$ %s) excede o saldo reembolsável desta transação (R$ %s).',
+            number_format($cents / 100, 2, ',', '.'),
+            number_format(max(0, $remainingCents) / 100, 2, ',', '.')
+        ));
+    }
+
+    try {
+        $client = OpenPixGetClient($apiKey);
+    } catch (\Throwable $e) {
+        return OpenPixRefundError('Falha ao inicializar o cliente OpenPix: ' . $e->getMessage());
+    }
+
+    try {
+        $chargeResult = $client->charges()->getOne(rawurlencode((string) $invoiceId));
+        $charge = $chargeResult['charge'] ?? null;
+    } catch (\OpenPix\PhpSdk\ApiErrorException $e) {
+        return OpenPixRefundError("Cobrança da fatura #{$invoiceId} não encontrada na OpenPix: " . $e->getMessage());
+    } catch (\Throwable $e) {
+        return OpenPixRefundError('Falha ao consultar a cobrança na OpenPix: ' . $e->getMessage());
+    }
+
+    if (!is_array($charge)) {
+        return OpenPixRefundError('Resposta inválida da OpenPix ao consultar a cobrança.');
+    }
+
+    $chargeTransactionID = (string) ($charge['transactionID'] ?? '');
+    if ($chargeTransactionID === '' || $chargeTransactionID !== $transid) {
+        return OpenPixRefundError("A transação {$transid} não corresponde à cobrança da fatura #{$invoiceId} na OpenPix.");
+    }
+
+    if (strtoupper((string) ($charge['status'] ?? '')) !== 'COMPLETED') {
+        return OpenPixRefundError('A cobrança não consta como paga (COMPLETED) na OpenPix. Status atual: ' . ($charge['status'] ?? 'DESCONHECIDO'));
+    }
+
+    $resolution = OpenPixRefundResolveCorrelationID($client, $invoiceId, $transid, $cents, $context['refund_count']);
+
+    if (!empty($resolution['duplicate_status'])) {
+        return OpenPixRefundError(
+            "Um reembolso idêntico já foi solicitado anteriormente (status: {$resolution['duplicate_status']}). Confira o painel OpenPix e o histórico da fatura antes de solicitar novamente.",
+            ['refundCorrelationID' => $resolution['correlationID']]
+        );
+    }
+
+    if (!empty($resolution['exhausted'])) {
+        return OpenPixRefundError('Tentativas anteriores deste reembolso falharam na OpenPix (NOT_ACCOMPLISHED). Verifique o saldo da conta e o painel OpenPix.');
+    }
+
+    $refundCorrelationID = $resolution['correlationID'];
+
+    $body = [
+        'correlationID' => $refundCorrelationID,
+        'value' => $cents,
+        'comment' => "Reembolso WHMCS - Fatura #{$invoiceId}",
+    ];
+
+    try {
+        $request = (new \OpenPix\PhpSdk\Request())
+            ->method('POST')
+            ->path('/api/v1/charge/' . rawurlencode((string) ($charge['correlationID'] ?? $invoiceId)) . '/refund')
+            ->body($body);
+
+        $result = $client->getRequestTransport()->transport($request);
+    } catch (\OpenPix\PhpSdk\ApiErrorException $e) {
+        return OpenPixRefundError('OpenPix recusou o reembolso: ' . $e->getMessage(), ['refundCorrelationID' => $refundCorrelationID]);
+    } catch (\Throwable $e) {
+        return OpenPixRefundError(
+            'Falha de comunicação ao solicitar o reembolso. Verifique no painel OpenPix se ele foi criado antes de tentar novamente. Detalhes: ' . $e->getMessage(),
+            ['refundCorrelationID' => $refundCorrelationID]
+        );
+    }
+
+    $refund = isset($result['refund']) && is_array($result['refund']) ? $result['refund'] : null;
+    $refundStatus = $refund ? strtoupper((string) ($refund['status'] ?? '')) : '';
+
+    $rawdata = [
+        'refundCorrelationID' => $refundCorrelationID,
+        'valorSolicitadoCentavos' => $cents,
+        'resposta' => $refund ?? $result,
+    ];
+
+    if ($refundStatus === 'NOT_ACCOMPLISHED') {
+        localAPI('LogActivity', ['description' => "PIX Reembolso: Reembolso recusado pela OpenPix (NOT_ACCOMPLISHED) - Fatura #{$invoiceId}"]);
+        return ['status' => 'declined', 'rawdata' => $rawdata];
+    }
+
+    if (!in_array($refundStatus, ['REFUNDED', 'CONFIRMED', 'IN_PROCESSING'], true)) {
+        return OpenPixRefundError(
+            "Resposta inesperada da OpenPix ao criar o reembolso (status: " . ($refundStatus !== '' ? $refundStatus : 'AUSENTE') . "). Verifique o painel OpenPix antes de tentar novamente.",
+            $rawdata
+        );
+    }
+
+    $refundTransId = (string) ($refund['refundId'] ?? ($refund['correlationID'] ?? $refundCorrelationID));
+
+    localAPI('LogActivity', ['description' => "PIX Reembolso: Reembolso de R$ " . number_format($cents / 100, 2, ',', '.') . " solicitado com sucesso - Fatura #{$invoiceId}, Status: {$refundStatus}, ID: {$refundTransId}"]);
+
+    return [
+        'status' => 'success',
+        'transid' => $refundTransId,
+        'fees' => 0,
+        'rawdata' => $rawdata,
+    ];
+}
 ?>
