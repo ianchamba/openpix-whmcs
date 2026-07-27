@@ -1,85 +1,89 @@
 <?php
-// Configurações iniciais
+require_once '../../../init.php';
+require_once '../../../includes/gatewayfunctions.php';
+require_once '../../../includes/invoicefunctions.php';
+require_once __DIR__ . '/vendor/autoload.php';
+
+use OpenPix\PhpSdk\Client;
+
 header('Content-Type: application/json');
 
-// Verifica se o correlationID foi enviado
-if (empty($_POST['correlationID'])) {
-    echo json_encode(['error' => 'correlationID não fornecido']);
+function OpenPixVerifyValidateCorrelationId() {
+    if (empty($_POST['correlationID'])) {
+        echo json_encode(['error' => 'correlationID não fornecido']);
+        exit;
+    }
+    
+    $correlationID = filter_var($_POST['correlationID'], FILTER_SANITIZE_NUMBER_INT);
+    if (!$correlationID || !is_numeric($correlationID)) {
+        echo json_encode(['error' => 'correlationID inválido']);
+        exit;
+    }
+    
+    return (string) $correlationID;
+}
+
+function OpenPixVerifyGetApiKey() {
+    $gatewayParams = getGatewayVariables('openpix');
+    
+    if (empty($gatewayParams['apiKey'])) {
+        echo json_encode(['error' => 'API Key não configurada']);
+        exit;
+    }
+    
+    return $gatewayParams['apiKey'];
+}
+
+function OpenPixVerifyGetChargeStatus($correlationID, $apiKey) {
+    try {
+        $client = Client::create($apiKey);
+        $result = $client->charges()->getOne($correlationID);
+        
+        return [
+            'success' => true,
+            'data' => $result
+        ];
+        
+    } catch (Exception $e) {
+        return [
+            'success' => false,
+            'error' => $e->getMessage()
+        ];
+    }
+}
+
+function OpenPixVerifyExtractStatus($response) {
+    if (!$response['success']) {
+        return [
+            'status' => 'ERROR',
+            'error' => $response['error']
+        ];
+    }
+    
+    $data = $response['data'];
+    
+    if (isset($data['charge']['status'])) {
+        return ['status' => $data['charge']['status']];
+    }
+    
+    if (isset($data['status'])) {
+        return ['status' => $data['status']];
+    }
+    
+    return [
+        'status' => 'UNKNOWN',
+        'error' => 'Status não encontrado na resposta'
+    ];
+}
+
+function OpenPixVerifyReturnResponse($result) {
+    echo json_encode($result);
     exit;
 }
 
-// Recupera o correlationID
-$correlationID = $_POST['correlationID'];
-
-// Configurações da API OpenPix
-// Importante: Estas configurações devem estar em um arquivo de configuração separado
-// ou usando variáveis de ambiente em um ambiente de produção
-$apiKey = getenv('OPENPIX_API_KEY') ?: ''; // Substitua pela sua API key real ou use variável de ambiente
-
-// URL corrigida da API OpenPix - correlationID como parte do caminho
-$apiUrl = "https://api.openpix.com.br/api/v1/charge/" . urlencode($correlationID);
-
-// Inicializa cURL
-$ch = curl_init();
-
-// Configura as opções do cURL
-curl_setopt_array($ch, [
-    CURLOPT_URL => $apiUrl,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => [
-        "Authorization: " . $apiKey,
-        "Accept: application/json"
-    ]
-]);
-
-// Executa a requisição
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-
-// Verifica erros de cURL
-if (curl_errno($ch)) {
-    echo json_encode([
-        'error' => 'Erro na requisição cURL: ' . curl_error($ch),
-        'status' => 'ERROR'
-    ]);
-    curl_close($ch);
-    exit;
-}
-
-// Fecha a conexão cURL
-curl_close($ch);
-
-// Verifica código de resposta HTTP
-if ($httpCode != 200) {
-    echo json_encode([
-        'error' => 'Erro na API OpenPix. Código HTTP: ' . $httpCode,
-        'status' => 'ERROR'
-    ]);
-    exit;
-}
-
-// Processa a resposta
-$data = json_decode($response, true);
-if (json_last_error() !== JSON_ERROR_NONE) {
-    echo json_encode([
-        'error' => 'Erro ao decodificar resposta JSON',
-        'status' => 'ERROR'
-    ]);
-    exit;
-}
-
-// Extrai o status do pagamento
-$result = [];
-if (isset($data['charge']['status'])) {
-    $result['status'] = $data['charge']['status'];
-} else {
-    $result['status'] = 'UNKNOWN';
-    $result['error'] = 'Status não encontrado na resposta';
-}
-
-// Você pode incluir mais informações da resposta se necessário
-// $result['additionalInfo'] = ...
-
-// Retorna o resultado como JSON
-echo json_encode($result);
-exit;
+$correlationID = OpenPixVerifyValidateCorrelationId();
+$apiKey = OpenPixVerifyGetApiKey();
+$response = OpenPixVerifyGetChargeStatus($correlationID, $apiKey);
+$result = OpenPixVerifyExtractStatus($response);
+OpenPixVerifyReturnResponse($result);
+?>
