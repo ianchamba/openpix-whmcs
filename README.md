@@ -21,6 +21,15 @@ Este é um módulo gratuito para integrar o método de pagamento OpenPix ao WHMC
 3. Configure o webhook no painel da OpenPix apontando para:  
 `https://seu-dominio.com/modules/gateways/callback/openpix.php`
 
+4. Confirme que o arquivo `includes/hooks/openpix.php` também foi enviado para
+   a instalação. Ele gera a cobrança automaticamente quando a fatura sai de
+   `Draft` e o WHMCS executa o evento `InvoiceCreated`.
+
+O hook só processa faturas `Unpaid` cujo método de pagamento seja `openpix`.
+Antes de chamar a API, ele verifica se `paymentLinkID` e `brCode` já existem.
+Além disso, a criação usa o ID da fatura como `correlationID` e solicita à
+OpenPix o retorno da cobrança existente, evitando cobranças duplicadas.
+
 ## Configuração da API
 
 Certifique-se de ter sua chave de API da OpenPix. Você pode obtê-la no painel de administração da OpenPix.

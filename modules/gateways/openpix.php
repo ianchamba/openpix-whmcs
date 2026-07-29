@@ -164,6 +164,10 @@ function OpenPixCheckPaidStatus($invoiceId) {
 }
 
 function OpenPixGetExistingCharge($invoiceData) {
+    if (!$invoiceData || empty($invoiceData['invoiceid'])) {
+        return null;
+    }
+
     $invoiceId = $invoiceData['invoiceid'];
     $result = Capsule::table('tblinvoices')->where('id', $invoiceId)->first();
     
@@ -396,7 +400,9 @@ function OpenPixCreateInvoice($params) {
         
         localAPI('LogActivity', ['description' => "PIX: Tentando criar cobrança via SDK OpenPix"]);
         
-        $result = $client->charges()->create($data);
+        // A correlação usa o ID da fatura e return_existing impede duplicação
+        // mesmo se o hook e a página da fatura executarem ao mesmo tempo.
+        $result = $client->charges()->create($data, true);
         
         localAPI('LogActivity', ['description' => "PIX: Sucesso ao criar cobrança via SDK"]);
         localAPI('LogActivity', ['description' => "PIX: Resposta do SDK: " . json_encode($result, JSON_UNESCAPED_UNICODE)]);
@@ -411,13 +417,25 @@ function OpenPixCreateInvoice($params) {
 }
 
 function OpenPixSaveChargeData($invoiceId, $paymentLinkID, $brCode) {
-    Capsule::table('tblinvoices')->where('id', $invoiceId)->update([
-        'paymentLinkID' => $paymentLinkID,
-        'brCode' => $brCode,
-    ]);
-    
-    run_hook('OpenpixInvoiceGenerated', ['invoiceId' => $invoiceId]);
-    localAPI('LogActivity', ['description' => "PIX: Hook 'OpenpixInvoiceGenerated' executado para a fatura #{$invoiceId}"]);
+    $updated = Capsule::table('tblinvoices')
+        ->where('id', $invoiceId)
+        ->where(function ($query) {
+            $query->whereNull('paymentLinkID')
+                ->orWhere('paymentLinkID', '')
+                ->orWhereNull('brCode')
+                ->orWhere('brCode', '');
+        })
+        ->update([
+            'paymentLinkID' => $paymentLinkID,
+            'brCode' => $brCode,
+        ]);
+
+    if ($updated > 0) {
+        run_hook('OpenpixInvoiceGenerated', ['invoiceId' => $invoiceId]);
+        localAPI('LogActivity', ['description' => "PIX: Hook 'OpenpixInvoiceGenerated' executado para a fatura #{$invoiceId}"]);
+    } else {
+        localAPI('LogActivity', ['description' => "PIX: Dados da cobrança da fatura #{$invoiceId} já estavam persistidos."]);
+    }
 }
 
 function OpenPixProcessNewCharge($params) {
